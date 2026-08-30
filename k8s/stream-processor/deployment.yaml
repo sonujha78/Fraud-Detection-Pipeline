@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detection-streams
+  namespace: kafka
+  labels:
+    app: fraud-detection-streams
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-detection-streams
+  template:
+    metadata:
+      labels:
+        app: fraud-detection-streams
+    spec:
+      containers:
+        - name: fraud-detection-streams
+          image: fraud-detection-streams:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka.kafka.svc.cluster.local:9092"
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+              cpu: 500m

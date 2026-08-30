@@ -1,0 +1,42 @@
+# Build outputs
+**/build/
+**/bin/
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Gradle
+.gradle/
+gradlew.bat
+
+# Go
+**/vendor/
+*.exe
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# Kubernetes generated configs
+**/kubeconfig
+**/*-config
+terraform/kind-cluster/fraud-detection-config
+
+# Secrets - CRITICAL, never commit these
+**/vault-init-keys.json
+**/*password*
+**/*secret*
+docs/evidence/vault-init-keys.json
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Node (if any)
+node_modules/

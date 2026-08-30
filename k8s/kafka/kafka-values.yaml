@@ -1,0 +1,48 @@
+image:
+  registry: docker.io
+  repository: bitnamilegacy/kafka
+  tag: 4.0.0-debian-12-r10
+
+controller:
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 2Gi
+
+broker:
+  persistence:
+    enabled: true
+    size: 2Gi
+
+listeners:
+  client:
+    protocol: PLAINTEXT
+  interbroker:
+    protocol: PLAINTEXT
+  controller:
+    protocol: PLAINTEXT
+
+kraft:
+  enabled: true
+
+replicaCount: 3
+
+resourcesPreset: "small"
+
+metrics:
+  kafka:
+    enabled: true
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/kafka-exporter
+  jmx:
+    enabled: true
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/jmx-exporter
+      tag: 1.4.0-debian-12-r0
+
+volumePermissions:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/os-shell

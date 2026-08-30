@@ -1,0 +1,46 @@
+image:
+  registry: docker.io
+  repository: bitnamilegacy/cassandra
+  tag: 5.0.5-debian-12-r7
+
+dbUser:
+  user: cassandra
+  forcePassword: false
+
+cluster:
+  name: fraud-detection-cluster
+  seedCount: 1
+
+replicaCount: 1
+
+persistence:
+  enabled: true
+  size: 2Gi
+
+resources:
+  requests:
+    memory: 1Gi
+    cpu: 300m
+  limits:
+    memory: 1.5Gi
+    cpu: 600m
+
+jvm:
+  maxHeapSize: "512M"
+  newHeapSize: "128M"
+
+extraEnvVars:
+  - name: JVM_OPTS
+    value: "-XX:MaxDirectMemorySize=256M"
+
+metrics:
+  enabled: false
+
+volumePermissions:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/os-shell
+
+global:
+  security:
+    allowInsecureImages: true

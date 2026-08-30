@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package frauddetection.v1;
+
+option go_package = "github.com/frauddetection/proto/v1;fraudv1";
+
+import "google/protobuf/timestamp.proto";
+
+// IngestService accepts incoming payment transactions and publishes
+// them onto the streaming pipeline for real-time fraud scoring.
+service IngestService {
+  rpc SubmitTransaction(SubmitTransactionRequest) returns (SubmitTransactionResponse);
+}
+
+// QueryService lets downstream consumers (ops dashboards, support tools)
+// look up fraud-scoring results that have already been computed.
+service QueryService {
+  rpc GetFlaggedTransactionsToday(GetFlaggedTransactionsTodayRequest) returns (GetFlaggedTransactionsTodayResponse);
+  rpc GetUserFraudScoreHistory(GetUserFraudScoreHistoryRequest) returns (GetUserFraudScoreHistoryResponse);
+}
+
+message Transaction {
+  string transaction_id = 1;
+  string user_id = 2;
+  string card_id = 3;
+  double amount = 4;
+  string currency = 5;
+  string merchant = 6;
+  string location = 7; // e.g. "IN-DEL", "US-NYC"
+  google.protobuf.Timestamp transaction_time = 8;
+}
+
+message SubmitTransactionRequest {
+  Transaction transaction = 1;
+}
+
+message SubmitTransactionResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message ScoredTransaction {
+  string transaction_id = 1;
+  string user_id = 2;
+  string card_id = 3;
+  double amount = 4;
+  string currency = 5;
+  string merchant = 6;
+  string location = 7;
+  google.protobuf.Timestamp transaction_time = 8;
+  double risk_score = 9;
+  bool flagged = 10;
+  repeated string risk_reasons = 11;
+}
+
+message GetFlaggedTransactionsTodayRequest {
+  int32 limit = 1;
+}
+
+message GetFlaggedTransactionsTodayResponse {
+  repeated ScoredTransaction transactions = 1;
+}
+
+message GetUserFraudScoreHistoryRequest {
+  string user_id = 1;
+  int32 limit = 2;
+}
+
+message GetUserFraudScoreHistoryResponse {
+  repeated ScoredTransaction transactions = 1;
+}

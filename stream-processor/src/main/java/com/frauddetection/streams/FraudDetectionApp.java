@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -42,6 +43,8 @@ public class FraudDetectionApp {
     private static final String SCORED_TOPIC = "transactions.scored";
     private static final String FLAGGED_TOPIC = "transactions.flagged";
     private static final String LAST_LOCATION_STORE = "last-location-store";
+    private static final String CARD_VELOCITY_STORE = "card-velocity-store";
+    private static final String USER_AMOUNT_STORE = "user-amount-store";
 
     public static void main(String[] args) {
         String bootstrapServers = System.getenv()
@@ -105,41 +108,32 @@ public class FraudDetectionApp {
                         lastLocSerde);
         builder.addStateStore(lastLocationStoreBuilder);
 
+        // Velocity and amount-deviation state is now maintained directly inside the
+        // TransactionScorer (see below) using these window stores, instead of via a
+        // separate re-keyed sub-topology. This avoids the repartition round-trip that
+        // previously caused a transaction's own contribution to be invisible to itself
+        // at scoring time (classic read-your-own-write race in a distributed counting
+        // topology).
+        StoreBuilder<WindowStore<String, Long>> cardVelocityStoreBuilder =
+                Stores.windowStoreBuilder(
+                        Stores.persistentWindowStore(CARD_VELOCITY_STORE, Duration.ofMinutes(10), Duration.ofMinutes(5), false),
+                        Serdes.String(),
+                        Serdes.Long());
+        builder.addStateStore(cardVelocityStoreBuilder);
+
+        StoreBuilder<WindowStore<String, UserAmountWindow>> userAmountStoreBuilder =
+                Stores.windowStoreBuilder(
+                        Stores.persistentWindowStore(USER_AMOUNT_STORE, Duration.ofHours(2), Duration.ofHours(1), false),
+                        Serdes.String(),
+                        userAmtSerde);
+        builder.addStateStore(userAmountStoreBuilder);
+
         KStream<String, Transaction> rawStream = builder.stream(
                 RAW_TOPIC, Consumed.with(Serdes.String(), txSerde));
 
-        // ---- Rule 1: 5-minute tumbling window count of transactions per card ----
-        KStream<String, Transaction> byCard = rawStream.selectKey((k, tx) -> tx.getCardId());
-
-        TimeWindows fiveMinWindow = TimeWindows.ofSizeAndGrace(Duration.ofMinutes(5), Duration.ofSeconds(30));
-
-        byCard.groupByKey(Grouped.with(Serdes.String(), txSerde))
-                .windowedBy(fiveMinWindow)
-                .count(Materialized.<String, Long, WindowStore<Bytes, byte[]>>as("card-velocity-store")
-                        .withKeySerde(Serdes.String())
-                        .withValueSerde(Serdes.Long()));
-
-        // ---- Rule 2: 1-hour tumbling window sum/avg of amount per user ----
-        KStream<String, Transaction> byUser = rawStream.selectKey((k, tx) -> tx.getUserId());
-        TimeWindows oneHourWindow = TimeWindows.ofSizeAndGrace(Duration.ofHours(1), Duration.ofMinutes(2));
-
-        byUser.groupByKey(Grouped.with(Serdes.String(), txSerde))
-                .windowedBy(oneHourWindow)
-                .aggregate(
-                        () -> UserAmountWindow.initial(""),
-                        (userId, tx, agg) -> {
-                            agg.setUserId(userId);
-                            return agg.add(tx.getAmount());
-                        },
-                        Materialized.<String, UserAmountWindow, WindowStore<Bytes, byte[]>>as("user-amount-store")
-                                .withKeySerde(Serdes.String())
-                                .withValueSerde(userAmtSerde)
-                );
-
-        // ---- Main scoring step: enrich every raw transaction using the last-location store ----
         KStream<String, ScoredTransaction> scored = rawStream.transformValues(
                 TransactionScorer::new,
-                LAST_LOCATION_STORE
+                LAST_LOCATION_STORE, CARD_VELOCITY_STORE, USER_AMOUNT_STORE
         );
 
         scored.to(SCORED_TOPIC, Produced.with(Serdes.String(), scoredSerde));
@@ -147,34 +141,43 @@ public class FraudDetectionApp {
         scored.filter((k, v) -> v.isFlagged())
                 .to(FLAGGED_TOPIC, Produced.with(Serdes.String(), scoredSerde));
 
-        // Persist every scored transaction to Cassandra (transactions_by_user,
-        // plus flagged_transactions for flagged ones - handled inside the writer).
         scored.foreach((k, v) -> cassandraWriter.write(v));
 
         return builder.build();
     }
 
     /**
-     * Stateful transformer that scores each transaction using the
-     * last-known-location store for the impossible-travel check.
-     * Velocity and historical-average checks are backed by the windowed
-     * KTables built above, which the Query Service can look up directly
-     * for confirmed, low-latency answers.
+     * Stateful transformer that scores each transaction using three
+     * directly-maintained state stores: last-known-location (impossible
+     * travel), a 5-minute tumbling window of per-card transaction counts
+     * (velocity), and a 1-hour tumbling window of per-user amount sum/count
+     * (amount deviation). All three are read AND updated within the same
+     * transform() call per record, so a transaction always sees its own
+     * contribution - no cross-topology race condition.
      */
     static class TransactionScorer implements ValueTransformer<Transaction, ScoredTransaction> {
 
         private KeyValueStore<String, LastLocation> lastLocationStore;
+        private WindowStore<String, Long> cardVelocityStore;
+        private WindowStore<String, UserAmountWindow> userAmountStore;
+
+        private static final long FIVE_MIN_MS = Duration.ofMinutes(5).toMillis();
+        private static final long ONE_HOUR_MS = Duration.ofHours(1).toMillis();
 
         @Override
         @SuppressWarnings("unchecked")
         public void init(ProcessorContext context) {
             this.lastLocationStore = (KeyValueStore<String, LastLocation>) context.getStateStore(LAST_LOCATION_STORE);
+            this.cardVelocityStore = (WindowStore<String, Long>) context.getStateStore(CARD_VELOCITY_STORE);
+            this.userAmountStore = (WindowStore<String, UserAmountWindow>) context.getStateStore(USER_AMOUNT_STORE);
         }
 
         @Override
         public ScoredTransaction transform(Transaction tx) {
             List<String> reasons = new ArrayList<>();
+            long txTimeMs = tx.getTransactionTime().toEpochMilli();
 
+            // ---- Rule 3: impossible travel ----
             LastLocation last = lastLocationStore.get(tx.getCardId());
             boolean impossibleTravel = false;
             if (last != null) {
@@ -188,12 +191,30 @@ public class FraudDetectionApp {
                 reasons.add("IMPOSSIBLE_TRAVEL");
             }
 
-            boolean amountDeviation = FraudRules.isAmountDeviation(tx.getAmount(), BigDecimal.ZERO, 0);
+            // ---- Rule 1: velocity - 5-minute tumbling window count per card ----
+            long windowStart = txTimeMs - (txTimeMs % FIVE_MIN_MS);
+            Long existingCount = cardVelocityStore.fetch(tx.getCardId(), windowStart);
+            long newCount = (existingCount == null ? 0L : existingCount) + 1;
+            cardVelocityStore.put(tx.getCardId(), newCount, windowStart);
+            boolean velocityBreach = FraudRules.isVelocityBreach(newCount);
+            if (velocityBreach) {
+                reasons.add("VELOCITY_BREACH");
+            }
+
+            // ---- Rule 2: amount deviation - 1-hour tumbling window sum/avg per user ----
+            long hourWindowStart = txTimeMs - (txTimeMs % ONE_HOUR_MS);
+            UserAmountWindow existing = userAmountStore.fetch(tx.getUserId(), hourWindowStart);
+            BigDecimal historicalAverage = existing != null ? existing.average() : BigDecimal.ZERO;
+            long historicalTxCount = existing != null ? existing.getTxCount() : 0;
+            boolean amountDeviation = FraudRules.isAmountDeviation(tx.getAmount(), historicalAverage, historicalTxCount);
             if (amountDeviation) {
                 reasons.add("AMOUNT_DEVIATION");
             }
+            UserAmountWindow updated = existing != null ? existing : UserAmountWindow.initial(tx.getUserId());
+            updated.add(tx.getAmount());
+            userAmountStore.put(tx.getUserId(), updated, hourWindowStart);
 
-            double riskScore = FraudRules.computeRiskScore(false, amountDeviation, impossibleTravel);
+            double riskScore = FraudRules.computeRiskScore(velocityBreach, amountDeviation, impossibleTravel);
             boolean flagged = FraudRules.shouldFlag(riskScore);
 
             if (flagged) {

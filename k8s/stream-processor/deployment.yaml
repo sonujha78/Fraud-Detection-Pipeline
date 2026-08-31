@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: fraud-detection-streams
-          image: fraud-detection-streams:1.3.0
+          image: fraud-detection-streams:1.4.0
           imagePullPolicy: IfNotPresent
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS

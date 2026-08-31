@@ -11,7 +11,6 @@ import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.UUID;
 
 /**
  * Writes scored transactions to Cassandra:
@@ -19,6 +18,10 @@ import java.util.UUID;
  *  - flagged transactions additionally go to flagged_transactions (ops dashboard)
  *
  * Uses a single shared CqlSession for the lifetime of the Streams app.
+ * IDs (user_id, card_id, transaction_id) are stored as plain text so the
+ * same human-readable IDs used by the Ingest Service and test producers
+ * (e.g. "user-1", "card-grpc-1") can be looked up directly, without any
+ * UUID conversion.
  */
 public class CassandraWriter implements AutoCloseable {
 
@@ -56,9 +59,9 @@ public class CassandraWriter implements AutoCloseable {
 
     public void write(ScoredTransaction tx) {
         try {
-            UUID userId = safeUuid(tx.getUserId());
-            UUID cardId = safeUuid(tx.getCardId());
-            UUID transactionId = safeUuid(tx.getTransactionId());
+            String userId = safe(tx.getUserId());
+            String cardId = safe(tx.getCardId());
+            String transactionId = safe(tx.getTransactionId());
             Instant txTime = tx.getTransactionTime() != null ? tx.getTransactionTime() : Instant.now();
             BigDecimal amount = tx.getAmount() != null ? tx.getAmount() : BigDecimal.ZERO;
 
@@ -79,13 +82,8 @@ public class CassandraWriter implements AutoCloseable {
         }
     }
 
-    private UUID safeUuid(String rawId) {
-        if (rawId == null) return new UUID(0, 0);
-        try {
-            return UUID.fromString(rawId);
-        } catch (IllegalArgumentException e) {
-            return UUID.nameUUIDFromBytes(rawId.getBytes());
-        }
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 
     @Override

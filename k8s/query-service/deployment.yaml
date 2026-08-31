@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-service
+  namespace: kafka
+  labels:
+    app: query-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: query-service
+  template:
+    metadata:
+      labels:
+        app: query-service
+    spec:
+      containers:
+        - name: query-service
+          image: query-service:1.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50052
+              name: grpc
+          env:
+            - name: CASSANDRA_HOST
+              value: "cassandra-0.cassandra-headless.cassandra.svc.cluster.local"
+            - name: CASSANDRA_KEYSPACE
+              value: "fraud_detection"
+            - name: CASSANDRA_USERNAME
+              value: "cassandra"
+            - name: CASSANDRA_PASSWORD
+              value: "bAxVShxT1B"
+            - name: GRPC_PORT
+              value: "50052"
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 100m
+            limits:
+              memory: 128Mi
+              cpu: 250m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-service
+  namespace: kafka
+spec:
+  selector:
+    app: query-service
+  ports:
+    - port: 50052
+      targetPort: 50052
+      protocol: TCP
+  type: ClusterIP

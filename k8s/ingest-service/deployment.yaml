@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-service
+  namespace: kafka
+  labels:
+    app: ingest-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingest-service
+  template:
+    metadata:
+      labels:
+        app: ingest-service
+    spec:
+      containers:
+        - name: ingest-service
+          image: ingest-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50051
+              name: grpc
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka.kafka.svc.cluster.local:9092"
+            - name: GRPC_PORT
+              value: "50051"
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 100m
+            limits:
+              memory: 128Mi
+              cpu: 250m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest-service
+  namespace: kafka
+spec:
+  selector:
+    app: ingest-service
+  ports:
+    - port: 50051
+      targetPort: 50051
+      protocol: TCP
+  type: ClusterIP

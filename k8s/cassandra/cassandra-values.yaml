@@ -44,3 +44,5 @@ volumePermissions:
 global:
   security:
     allowInsecureImages: true
+
+existingConfiguration: cassandra-custom-config

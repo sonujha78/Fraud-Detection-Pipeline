@@ -3,6 +3,7 @@ package com.frauddetection.streams;
 import com.frauddetection.streams.model.*;
 import com.frauddetection.streams.rules.FraudRules;
 import com.frauddetection.streams.serde.JsonSerde;
+import com.frauddetection.streams.storage.CassandraWriter;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KafkaStreams;
@@ -29,8 +30,9 @@ import java.util.Properties;
  *
  * Reads raw transactions, maintains windowed / keyed state (per-card
  * velocity count, per-user rolling average, per-card last known location),
- * applies fraud rules to every transaction, and emits scored results to
- * "transactions.scored" and high-risk results to "transactions.flagged".
+ * applies fraud rules to every transaction, emits scored results to
+ * "transactions.scored" and high-risk results to "transactions.flagged",
+ * and persists every scored transaction to Cassandra.
  */
 public class FraudDetectionApp {
 
@@ -44,9 +46,17 @@ public class FraudDetectionApp {
     public static void main(String[] args) {
         String bootstrapServers = System.getenv()
                 .getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "kafka.kafka.svc.cluster.local:9092");
+        String cassandraHost = System.getenv().getOrDefault("CASSANDRA_HOST", "cassandra.cassandra.svc.cluster.local");
+        int cassandraPort = Integer.parseInt(System.getenv().getOrDefault("CASSANDRA_PORT", "9042"));
+        String cassandraDatacenter = System.getenv().getOrDefault("CASSANDRA_DATACENTER", "datacenter1");
+        String cassandraKeyspace = System.getenv().getOrDefault("CASSANDRA_KEYSPACE", "fraud_detection");
+        String cassandraUsername = System.getenv().getOrDefault("CASSANDRA_USERNAME", "cassandra");
+        String cassandraPassword = System.getenv().getOrDefault("CASSANDRA_PASSWORD", "bAxVShxT1B");
+
+        CassandraWriter cassandraWriter = new CassandraWriter(cassandraHost, cassandraPort, cassandraDatacenter, cassandraKeyspace, cassandraUsername, cassandraPassword);
 
         Properties props = buildStreamsConfig(bootstrapServers);
-        Topology topology = buildTopology();
+        Topology topology = buildTopology(cassandraWriter);
 
         log.info("Starting Fraud Detection Streams app. Bootstrap servers: {}", bootstrapServers);
         log.info("Topology:\n{}", topology.describe());
@@ -56,6 +66,7 @@ public class FraudDetectionApp {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("Shutting down Fraud Detection Streams app...");
             streams.close(Duration.ofSeconds(10));
+            cassandraWriter.close();
         }));
 
         streams.setUncaughtExceptionHandler(exception -> {
@@ -79,7 +90,7 @@ public class FraudDetectionApp {
         return props;
     }
 
-    static Topology buildTopology() {
+    static Topology buildTopology(CassandraWriter cassandraWriter) {
         StreamsBuilder builder = new StreamsBuilder();
 
         JsonSerde<Transaction> txSerde = new JsonSerde<>(Transaction.class);
@@ -87,7 +98,6 @@ public class FraudDetectionApp {
         JsonSerde<LastLocation> lastLocSerde = new JsonSerde<>(LastLocation.class);
         JsonSerde<UserAmountWindow> userAmtSerde = new JsonSerde<>(UserAmountWindow.class);
 
-        // Persistent key-value store: last known location per card (for impossible-travel check)
         StoreBuilder<KeyValueStore<String, LastLocation>> lastLocationStoreBuilder =
                 Stores.keyValueStoreBuilder(
                         Stores.persistentKeyValueStore(LAST_LOCATION_STORE),
@@ -137,6 +147,10 @@ public class FraudDetectionApp {
         scored.filter((k, v) -> v.isFlagged())
                 .to(FLAGGED_TOPIC, Produced.with(Serdes.String(), scoredSerde));
 
+        // Persist every scored transaction to Cassandra (transactions_by_user,
+        // plus flagged_transactions for flagged ones - handled inside the writer).
+        scored.foreach((k, v) -> cassandraWriter.write(v));
+
         return builder.build();
     }
 
@@ -161,7 +175,6 @@ public class FraudDetectionApp {
         public ScoredTransaction transform(Transaction tx) {
             List<String> reasons = new ArrayList<>();
 
-            // Rule 3: impossible travel
             LastLocation last = lastLocationStore.get(tx.getCardId());
             boolean impossibleTravel = false;
             if (last != null) {
@@ -175,8 +188,6 @@ public class FraudDetectionApp {
                 reasons.add("IMPOSSIBLE_TRAVEL");
             }
 
-            // Rule 2 (cold-start signal): full historical-average check is served
-            // via the windowed KTable / Query Service against Cassandra.
             boolean amountDeviation = FraudRules.isAmountDeviation(tx.getAmount(), BigDecimal.ZERO, 0);
             if (amountDeviation) {
                 reasons.add("AMOUNT_DEVIATION");

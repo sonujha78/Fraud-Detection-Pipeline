@@ -4,11 +4,14 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"time"
 
 	fraudv1 "github.com/frauddetection/query-service/proto/v1"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/gocql/gocql"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -139,6 +142,7 @@ func main() {
 	cassandraUsername := getEnv("CASSANDRA_USERNAME", "cassandra")
 	cassandraPassword := getEnv("CASSANDRA_PASSWORD", "cassandra")
 	grpcPort := getEnv("GRPC_PORT", "50052")
+	metricsPort := getEnv("METRICS_PORT", "9101")
 
 	cluster := gocql.NewCluster(cassandraHost)
 	cluster.Keyspace = cassandraKeyspace
@@ -157,13 +161,26 @@ func main() {
 
 	log.Printf("Connected to Cassandra at %s (keyspace=%s)", cassandraHost, cassandraKeyspace)
 
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		log.Printf("Metrics server listening on :%s/metrics", metricsPort)
+		if err := http.ListenAndServe(":"+metricsPort, mux); err != nil {
+			log.Printf("metrics server error: %v", err)
+		}
+	}()
+
 	lis, err := net.Listen("tcp", ":"+grpcPort)
 	if err != nil {
 		log.Fatalf("failed to listen on port %s: %v", grpcPort, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+	)
 	fraudv1.RegisterQueryServiceServer(grpcServer, &server{session: session})
+	grpc_prometheus.Register(grpcServer)
+	grpc_prometheus.EnableHandlingTimeHistogram()
 
 	log.Printf("Query Service listening on :%s", grpcPort)
 	if err := grpcServer.Serve(lis); err != nil {

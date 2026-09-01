@@ -16,4 +16,5 @@ ENV CASSANDRA_HOST=cassandra.cassandra.svc.cluster.local
 ENV CASSANDRA_KEYSPACE=fraud_detection
 
 EXPOSE 50052
+EXPOSE 9101
 ENTRYPOINT ["/query-service"]

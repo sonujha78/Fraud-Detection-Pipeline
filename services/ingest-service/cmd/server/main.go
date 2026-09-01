@@ -4,11 +4,14 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	fraudv1 "github.com/frauddetection/ingest-service/proto/v1"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/kafka-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,7 +20,6 @@ import (
 
 const rawTopic = "transactions.raw"
 
-// server implements the IngestService gRPC contract.
 type server struct {
 	fraudv1.UnimplementedIngestServiceServer
 	writer *kafka.Writer
@@ -47,11 +49,6 @@ func (s *server) SubmitTransaction(ctx context.Context, req *fraudv1.SubmitTrans
 		return nil, status.Error(codes.Internal, "failed to encode transaction")
 	}
 
-	// IMPORTANT: key by card_id so all transactions for the same card land
-	// on the same Kafka partition. The Streams app maintains per-card state
-	// (last-known-location for the impossible-travel check); without a
-	// consistent key, related transactions can be scattered across
-	// partitions/tasks and the stateful check silently breaks.
 	msg := kafka.Message{
 		Key:   []byte(tx.GetCardId()),
 		Value: payload,
@@ -75,23 +72,38 @@ func (s *server) SubmitTransaction(ctx context.Context, req *fraudv1.SubmitTrans
 func main() {
 	bootstrapServers := getEnv("KAFKA_BOOTSTRAP_SERVERS", "kafka.kafka.svc.cluster.local:9092")
 	grpcPort := getEnv("GRPC_PORT", "50051")
+	metricsPort := getEnv("METRICS_PORT", "9100")
 
 	writer := &kafka.Writer{
 		Addr:                   kafka.TCP(strings.Split(bootstrapServers, ",")...),
 		Topic:                  rawTopic,
-		Balancer:               &kafka.Hash{}, // key-based partitioning
+		Balancer:               &kafka.Hash{},
 		RequiredAcks:           kafka.RequireAll,
 		AllowAutoTopicCreation: false,
 	}
 	defer writer.Close()
+
+	// Prometheus metrics HTTP server (separate port from gRPC)
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		log.Printf("Metrics server listening on :%s/metrics", metricsPort)
+		if err := http.ListenAndServe(":"+metricsPort, mux); err != nil {
+			log.Printf("metrics server error: %v", err)
+		}
+	}()
 
 	lis, err := net.Listen("tcp", ":"+grpcPort)
 	if err != nil {
 		log.Fatalf("failed to listen on port %s: %v", grpcPort, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+	)
 	fraudv1.RegisterIngestServiceServer(grpcServer, &server{writer: writer})
+	grpc_prometheus.Register(grpcServer)
+	grpc_prometheus.EnableHandlingTimeHistogram()
 
 	log.Printf("Ingest Service listening on :%s, publishing to Kafka at %s", grpcPort, bootstrapServers)
 	if err := grpcServer.Serve(lis); err != nil {

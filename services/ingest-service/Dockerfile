@@ -15,4 +15,5 @@ ENV GRPC_PORT=50051
 ENV KAFKA_BOOTSTRAP_SERVERS=kafka.kafka.svc.cluster.local:9092
 
 EXPOSE 50051
+EXPOSE 9100
 ENTRYPOINT ["/ingest-service"]

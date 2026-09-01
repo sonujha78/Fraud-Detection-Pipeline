@@ -1,0 +1,90 @@
+{
+  "title": "Fraud Detection Pipeline",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Live Transaction Throughput (gRPC requests/sec)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(grpc_server_handled_total{app=\"ingest-service\"}[1m]))",
+          "legendFormat": "Ingest throughput"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Kafka Consumer Group Lag",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(kafka_consumergroup_lag{consumergroup=\"fraud-detection-streams-app\"}) by (topic)",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "gRPC Request Latency (p99)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket[5m])) by (le, grpc_service, grpc_method))",
+          "legendFormat": "{{grpc_service}}/{{grpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "gRPC Error Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(grpc_server_handled_total{grpc_code!=\"OK\"}[5m])) by (grpc_service, grpc_code)",
+          "legendFormat": "{{grpc_service}} - {{grpc_code}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Kafka Broker Status (Active Brokers)",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "kafka_controller_kafkacontroller_activebrokercount_value"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Total Partition Count",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 16},
+      "targets": [
+        {
+          "expr": "kafka_controller_kafkacontroller_globalpartitioncount_value"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Offline Partitions (should be 0)",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 16},
+      "targets": [
+        {
+          "expr": "kafka_controller_kafkacontroller_offlinepartitionscount_value"
+        }
+      ]
+    }
+  ]
+}

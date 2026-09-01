@@ -41,12 +41,3 @@ docs/evidence/vault-init-keys.json
 # Node (if any)
 node_modules/
 
-# Downloaded Helm chart sources (re-fetched via helm pull, not our code)
-k8s/*/prometheus/
-k8s/*/grafana/
-k8s/*/kafka/
-k8s/*/cassandra/
-!k8s/*/kafka-values.yaml
-!k8s/*/cassandra-values.yaml
-!k8s/*/prometheus-values.yaml
-!k8s/*/grafana-values.yaml

@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: fraud-detection-pipeline
+  description: Real-time fraud detection streaming pipeline using Kafka, Kafka Streams, Cassandra, and gRPC/Go services
+  annotations:
+    github.com/project-slug: sonujha78/Fraud-Detection-Pipeline
+    backstage.io/kubernetes-id: fraud-detection-pipeline
+  links:
+    - url: https://github.com/sonujha78/Fraud-Detection-Pipeline
+      title: GitHub Repo
+      icon: github
+spec:
+  type: service
+  lifecycle: production
+  owner: guests
+  system: fraud-detection
+  dependsOn:
+    - resource:default/fraud-kafka-cluster
+    - resource:default/fraud-cassandra-db
